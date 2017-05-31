@@ -28,8 +28,13 @@ public class UserProcess {
 	pageTable = new TranslationEntry[numPhysPages];
 	for (int i=0; i<numPhysPages; i++)
 	    pageTable[i] = new TranslationEntry(i,i, true,false,false,false);
+	Lib.assertTrue(KThread.currentThread() instanceof UThread);
+		currThread=(UThread)KThread.currentThread();
 	processID=nextPID++;
-	
+	runningProcesses++;
+	parentID=null;
+	exitStatus=null;
+	children= new LinkedList<UserProcess>();
 	//instantiate open files for this process
 	fileDescriptors = new OpenFile[16];
 	//always reserves space for stdin and stdout
@@ -369,13 +374,6 @@ public class UserProcess {
      * Release any resources allocated by <tt>loadSections()</tt>.
      */
     protected void unloadSections() {
-
-	/* TODO when a process ends it must release the pages it holds as memory
-	   this is where it happens, this must be called if the process ends or
-	   it finishes abnormally
-	   SOLUTION call from handleExit
-	   
-	*/
 	for(OpenFile file : fileDescriptors)
 		file.close();		
 	for(int i=0;i<numPages;i++){
@@ -421,26 +419,44 @@ public class UserProcess {
 
 	return 0;
     }
+    /*
+	handleExit(int a0), syscall
+	releases any resource held by this proccess
+	an exiting process should set status to 0
+	
+	@param a0 is the exit status
+	
+	@return nothing exit() never returns
+    */
     private int handleExit(int a0){
     	//TODO notify parent node, if any, of exit
     	//must notify children nodes, set parent to null or 0
+	for(UserProcess child : children)
+	    child.parentID=null;
 	unloadSections();
-	exitStatus=a0;
+	exitStatus=0;
+	a0=exitStatus;
 	//signal process waiting? might just use UThread join to handle
-	handleHalt();
+	if(--runningProcesses==0)	
+	    UserKernel.terminate();
 	//add assert so that caller is current thread
-	KThread.currentThread().finish();
-	return a0;
+	currThread.finish();
+	return exitStatus;
     }
     /*
-    	a0 is a pointer to the filename to execute
-    	a1 is the number of parameters, must be non negative
-    	a2 is the array containing the parameters, arguments should be 4 bytes like the argv
+	handleExec(int a0, int a1, int a2), syscall
+	executes the program specified by a0 in a child process
+	
+    	@param a0 is a pointer to the filename to execute
+    	@param a1 is the number of parameters, must be non negative
+    	@param a2 is the array containing the parameters, arguments should be 4 bytes like the argv
+
+	@return child process ID, -1 on error
     */
     private int handleExec(int a0, int a1, int a2){
 	if(a0<0 || a1<0 || a2<0)
 	    return -1;
-	String filename = readVirtualMemoryString(a0,256);
+	String filename = readVirtualMemoryString(a0,maxStringSize);
 	String end = filename.substring(filename.length()-4,filename.length());
 	if(!end.equals(".coff"))
 	    return -1;
@@ -451,7 +467,7 @@ public class UserProcess {
 	    byte[] buffer = new byte[4];
 	    int read = readVirtualMemory(a2+offset,buffer);
             int address = Lib.bytesToInt(buffer,0);
-            args[i]=readVirtualMemoryString(address,256);
+            args[i]=readVirtualMemoryString(address,maxStringSize);
             offset+=4;
 	}
 	UserProcess newChild = new UserProcess();
@@ -465,7 +481,7 @@ public class UserProcess {
     }
     /*
 	a0 is the id of the child process to join
-	a1 is a pointer to the child exit status
+	a1 is a pointer to where the child exit status will be stored
 	
     */
     private int handleJoin(int a0, int a1){
@@ -473,12 +489,30 @@ public class UserProcess {
     	procedure:
     		find process id(a0) in the process children list
 	    		if not found return error
-	        join the child, might need to add a UThread param to use join
-	        remove the child from the list
+	        join the child, might need to add a UThread param to use that join
+	        remove the child from the list 
 	        read removed child exit status
 	        store exit status in a1
     	*/
-    	return -1;
+	int p=-1;
+	UserProcess up;
+	for(UserProcess child:children)
+	    if(child.processID==a0){
+		p=child.processID;
+		up=children.remove(child);
+		up.parentID=null;
+		if(up.exitStatus==0)
+		    return 1;
+		break;
+	    }
+	if(p==-1)
+	    return -1;
+	//TODO join stuff here
+	up.currThread.join();
+	if(up.exitStatus==null)
+	    return 0;
+	return 1;
+	
     }
     /*
 	handleCreat(int a0), syscall
@@ -629,12 +663,9 @@ public class UserProcess {
 	@returns 0 if successful, -1 if there's an error
     */
     private int handleUnlink(int a0){
-    	/*TODO add a toDelete flag to the OpenFile, this call sets it to true
-    	  then tries to delete it.
-    	*/
     	if(a0<0) 
     	    return -1;
-    	String name = readVirtualMemoryString(a0,256);
+    	String name = readVirtualMemoryString(a0,maxStringSize);
     	OpenFile file;
     	int i=-1;
     	for(int j=0;j<16;j++){
@@ -646,7 +677,9 @@ public class UserProcess {
     	}
     	if(i!=-1)
     	   return -1;
-    	   
+    	/*TODO keep global opened files list?
+	   check that to see if any proccess has it open?
+	*/
     	ThreadedKernel.fileSystem.remove(name);
     	return 0;
     }
@@ -752,7 +785,7 @@ public class UserProcess {
     }
 
 
-	// the files this process has opened, max 16
+    // the files this process has opened, max 16
     protected OpenFile[] fileDescriptors;
     /** The program being run by this process. */
     protected Coff coff;
@@ -773,10 +806,12 @@ public class UserProcess {
     private int argc, argv;
     /** Global process count. */
     private static int nextPID=0;
+    private static int runningProcesses=0;
     /** Unique Process ID. */
     private int processID;
     private int parentID;
     private LinkedList<UserProcess> children;
+    private UThread currThread;
     public int exitStatus;
     /** Page Size defined by the processor. */
     private static final int pageSize = Processor.pageSize;

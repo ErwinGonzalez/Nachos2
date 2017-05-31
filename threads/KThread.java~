@@ -426,9 +426,10 @@ public class KThread {
 	thread3.setName("test 3");
 	thread1.fork();
 	thread2.join();
-	thread2.fork();
-	thread3.join();
 	thread3.fork();
+	thread3.join();
+
+	thread2.fork();
     }
     
     

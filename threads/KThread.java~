@@ -194,8 +194,8 @@ public class KThread {
 
 	currentThread.status = statusFinished;
 	KThread next;
-	while((next=joinQueue.nextThread())!=null)
-		readyQueue.waitForAccess(next);//if not empty adds waiting threads to readyQueue		
+		while(joinQueue!=null &&(next=joinQueue.nextThread())!=null)
+			readyQueue.waitForAccess(next);//if not empty adds waiting threads to readyQueue		
 	
 	sleep();
     }
@@ -426,10 +426,9 @@ public class KThread {
 	thread3.setName("test 3");
 	thread1.fork();
 	thread2.join();
-	thread3.fork();
-	thread3.join();
-
 	thread2.fork();
+	thread3.join();
+	thread3.fork();
     }
     
     

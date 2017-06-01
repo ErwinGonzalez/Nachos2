@@ -198,6 +198,6 @@ int main(int argc, char *argv[]) {
 
 	readline(buffer, BUFFERSIZE);
 
-	//runline(buffer);
+	runline(buffer);
     }
 }

@@ -28,12 +28,10 @@ public class UserProcess {
 	pageTable = new TranslationEntry[numPhysPages];
 	for (int i=0; i<numPhysPages; i++)
 	    pageTable[i] = new TranslationEntry(i,i, true,false,false,false);
-	Lib.assertTrue(KThread.currentThread() instanceof UThread);
-		currThread=(UThread)KThread.currentThread();
-	processID=nextPID++;
+
+	processID=UserKernel.getNextProcessID();
 	runningProcesses++;
-	parentID=null;
-	exitStatus=null;
+	exitStatus=-2;
 	children= new LinkedList<UserProcess>();
 	//instantiate open files for this process
 	fileDescriptors = new OpenFile[16];
@@ -65,8 +63,8 @@ public class UserProcess {
 	if (!load(name, args))
 	    return false;
 	
-	new UThread(this).setName(name).fork();
-
+	currThread = (UThread)(new UThread(this).setName(name));
+	currThread.fork();
 	return true;
     }
 
@@ -209,6 +207,7 @@ public class UserProcess {
 	// gets page number and offset for the vpn,
 	int vpn = Machine.processor().pageFromAddress(vaddr);
 	int addrOffset = Machine.processor().offsetFromAddress(vaddr);
+	Lib.debug(dbgProcess,"vaddr:"+vaddr+" vpn:"+vpn);
 	// get corresponding ppn from pageTable
 	int ppn = pageTable[vpn].ppn;
 	//obtains paddr
@@ -364,6 +363,7 @@ public class UserProcess {
 		entry.valid=true;
 		entry.readOnly=section.isReadOnly();
 		section.loadPage(i, ppn);
+		Lib.debug(dbgProcess,"TE: "+entry.ppn+" "+entry.vpn);
 	    }
 	}
 	
@@ -374,13 +374,10 @@ public class UserProcess {
      * Release any resources allocated by <tt>loadSections()</tt>.
      */
     protected void unloadSections() {
-	for(OpenFile file : fileDescriptors)
-		file.close();		
 	for(int i=0;i<numPages;i++){
 		TranslationEntry entry = pageTable[i];
 		UserKernel.releasePhysPage(entry.ppn);
 		entry.valid=false;
-		
 	}
 	coff.close();
 		
@@ -413,6 +410,7 @@ public class UserProcess {
      * Handle the halt() system call. 
      */
     private int handleHalt() {
+	Lib.debug(dbgProcess,"handleHalt() ");
 	// TODO add unique process ID checking so that only the root process can call halt
 		Machine.halt();
 		Lib.assertNotReached("Machine.halt() did not halt machine!");
@@ -428,20 +426,25 @@ public class UserProcess {
 	
 	@return nothing exit() never returns
     */
-    private int handleExit(int a0){
+    private void handleExit(int a0){
+	Lib.debug(dbgProcess,"handleExit() ");
     	//TODO notify parent node, if any, of exit
     	//must notify children nodes, set parent to null or 0
-	for(UserProcess child : children)
+	for(UserProcess child : children){
 	    child.parentID=null;
+	    children.remove(child);
+	}
+	for(OpenFile file : fileDescriptors)
+		if(file!=null)
+		file.close();		
 	unloadSections();
-	exitStatus=0;
-	a0=exitStatus;
+	exitStatus=a0;
 	//signal process waiting? might just use UThread join to handle
-	if(--runningProcesses==0)	
-	    UserKernel.terminate();
 	//add assert so that caller is current thread
-	currThread.finish();
-	return exitStatus;
+	Lib.assertTrue(KThread.currentThread()==this.currThread);	
+		currThread.finish();
+	if(--runningProcesses==0)	
+	    UserKernel.kernel.terminate();
     }
     /*
 	handleExec(int a0, int a1, int a2), syscall
@@ -454,13 +457,18 @@ public class UserProcess {
 	@return child process ID, -1 on error
     */
     private int handleExec(int a0, int a1, int a2){
-	if(a0<0 || a1<0 || a2<0)
+	Lib.debug(dbgProcess,"handleExec() ");
+	if(a0<0 || a1<1 || a2<0)
 	    return -1;
 	String filename = readVirtualMemoryString(a0,maxStringSize);
-	String end = filename.substring(filename.length()-4,filename.length());
+	String end = filename.substring(filename.length()-5,filename.length());
+ 	Lib.debug(dbgProcess," file "+filename);
+ 	Lib.debug(dbgProcess," args "+a1);	
+ 	Lib.debug(dbgProcess," argv "+a2);	
+ 	Lib.debug(dbgProcess," end "+end);
 	if(!end.equals(".coff"))
 	    return -1;
-	    
+     	Lib.debug(dbgProcess," correct suffix");
 	String[] args = new String[a1];
 	int offset =  0;
 	for(int i=0;i<a1;i++){
@@ -471,11 +479,12 @@ public class UserProcess {
             offset+=4;
 	}
 	UserProcess newChild = new UserProcess();
-	newChild.parentID=this.processID;
+	newChild.parentID=this;
 	children.add(newChild);
 	boolean success = newChild.execute(filename,args);
-	if(success)
-	    return newChild.processID;
+	if(success){
+	    Lib.debug(dbgProcess," newChild "+newChild.processID);
+	    return newChild.processID;}
 	else
 	    return -1;
     }
@@ -485,6 +494,7 @@ public class UserProcess {
 	
     */
     private int handleJoin(int a0, int a1){
+	Lib.debug(dbgProcess,"handleJoin() ");
     	/*
     	procedure:
     		find process id(a0) in the process children list
@@ -495,23 +505,25 @@ public class UserProcess {
 	        store exit status in a1
     	*/
 	int p=-1;
-	UserProcess up;
+	UserProcess up=null;
 	for(UserProcess child:children)
 	    if(child.processID==a0){
-		p=child.processID;
-		up=children.remove(child);
-		up.parentID=null;
-		if(up.exitStatus==0)
-		    return 1;
+		up=child;
 		break;
 	    }
-	if(p==-1)
+	if(up==null)
 	    return -1;
 	//TODO join stuff here
+	children.remove(up);
+	up.parentID=null;
 	up.currThread.join();
-	if(up.exitStatus==null)
-	    return 0;
-	return 1;
+	byte[] res = new byte[4];
+	res = Lib.bytesFromInt(up.exitStatus);
+	int b = writeVirtualMemory(a1,res);
+	if(b!=4)
+		return 1;
+	else 
+		return 0;
 	
     }
     /*
@@ -527,8 +539,11 @@ public class UserProcess {
 	  second filename must be a valid value
 	  finally there must be less than 16 files open for the process 
 	  must change this one, after mem add checks*/
-	
+	Lib.debug(dbgProcess,"handleCreate()");
+	if(a0<0)
+		return -1;
 	String filename = readVirtualMemoryString(a0,maxStringSize);
+	Lib.debug(dbgProcess,"filename"+filename);
 	int openFD;
 	for(openFD =2;openFD<16;openFD++){
 	    if(fileDescriptors[openFD]==null)
@@ -536,7 +551,7 @@ public class UserProcess {
 	}
 	// returns -1 if any condition is true, might need to change for 
 	// debug purposes
-	if (a0 < 0 || filename == null || openFD==16)
+	if (filename == null || openFD==16)
 	    return -1;
 	// calls filesystem to handle a new file creation
 	OpenFile file  = ThreadedKernel.fileSystem.open(filename,true);
@@ -560,23 +575,29 @@ public class UserProcess {
 	  second filename must be a valid value
 	  finally there must be less than 16 files open for the process 
 	  must change this one, after mem add checks*/
-	
+	Lib.debug(dbgProcess,"handleOpen() ");
+	if(a0<0)
+		return -1;
 	String filename = readVirtualMemoryString(a0,maxStringSize);
+	Lib.debug(dbgProcess,"Open filename "+filename);
 	int openFD;
 	for(openFD =0;openFD<16;openFD++){
 	    if(fileDescriptors[openFD]==null)
 		break;
 	}
 	// returns -1 if any condition is true, might need to change for debug purposes
-	if (a0 < 0 || filename == null || openFD==16)
+	if (filename == null || openFD==16)
 	    return -1;
 	// calls filesystem to handle a new file opening
 	OpenFile file  = ThreadedKernel.fileSystem.open(filename,false);
-	if(file!=null)
+	Lib.debug(dbgProcess," file "+file.getName()+" FD: "+openFD);
+	if(file!=null){
 		fileDescriptors[openFD]=file;
+		return openFD;
+	}
 	else
 		return -1;
-	return openFD;
+
 	
     }
 
@@ -591,7 +612,7 @@ public class UserProcess {
 	@returns number of bytes read if successful, -1 if there's an error
     */
     private int handleRead(int a0, int a1, int a2){
-	
+	Lib.debug(dbgProcess,"handleRead() ");
 	// returns -1 if buffer is at invalid address
 	if(a1<0)
 	    return -1;
@@ -601,11 +622,16 @@ public class UserProcess {
 	// if file to be read isn't part of the process' fileDescriptors return -1 	
 	if(fileDescriptors[a0] == null)
 	    return -1;
-	
+	Lib.debug(dbgProcess,"FD:"+a0);
+	Lib.debug(dbgProcess,"Buffer:"+a1);
+	Lib.debug(dbgProcess,"Bytes"+a2);
 	// reads file into buffer
 	byte[] buffer =new byte[a2];
-	int read = fileDescriptors[a0].read(a1,buffer,0,a2);
-	return writeVirtualMemory(a1,buffer,0,read);
+	int read2 = fileDescriptors[a0].read(a0,buffer,0,a2);
+	if(read2<0)
+		return -1;
+	else
+		return writeVirtualMemory(read2,buffer);
     }
     /*
 	handleWrite(int a0, int a1, int a2), syscall
@@ -644,14 +670,18 @@ public class UserProcess {
     private int handleClose(int a0){
     	//TODO flush changes to file before closing
     	// checks if it's a valid file descriptor
+	Lib.debug(dbgProcess,"handleClose() ");
 	if(a0>15 || a0<0)
 		return -1;
 	// checks if it exists
 	if(fileDescriptors[a0]==null)
 		return -1;
 	// if it's valid fd and exists, closes the fd
-	fileDescriptors[a0].close();
+	Lib.debug(dbgProcess," file "+fileDescriptors[a0].getName());
+	OpenFile file = fileDescriptors[a0];
 	fileDescriptors[a0]=null;
+	file.close();
+	
 	return 0;
     }
     /*
@@ -663,21 +693,28 @@ public class UserProcess {
 	@returns 0 if successful, -1 if there's an error
     */
     private int handleUnlink(int a0){
+	Lib.debug(dbgProcess,"handleUnlink() ");
     	if(a0<0) 
     	    return -1;
     	String name = readVirtualMemoryString(a0,maxStringSize);
-    	OpenFile file;
+	Lib.debug(dbgProcess,"unlink "+name);
+    	OpenFile file=null;
     	int i=-1;
     	for(int j=0;j<16;j++){
     	    file = fileDescriptors[j];
     	    if(file!=null && file.getName().equals(name)){
+	    	Lib.debug(dbgProcess,"file "+fileDescriptors[j].getName());
+		Lib.debug(dbgProcess,"  "+file.getName().equals(name));
     	    	i=j;
     	    	break;
     	    }
     	}
     	if(i!=-1)
     	   return -1;
-    	   
+    	/*TODO keep global opened files list?
+	   check that to see if any proccess has it open?
+	*/
+	Lib.debug(dbgProcess," File "+name+" unlinking...");
     	ThreadedKernel.fileSystem.remove(name);
     	return 0;
     }
@@ -728,11 +765,13 @@ public class UserProcess {
 	case syscallHalt://syscall 0
 	    return handleHalt();
 	case syscallExit:
+	    handleExit(a0);
+	    Lib.assertNotReached();
 	    return 0;
 	case syscallExec:
-	    return 0;
+	    return handleExec(a0,a1,a2);
 	case syscallJoin:
-	    return 0;
+	    return handleJoin(a0,a1);
 	case syscallCreate://syscall 4
 	    return handleCreat(a0);
 	case syscallOpen://syscall 5
@@ -804,10 +843,11 @@ public class UserProcess {
     private int argc, argv;
     /** Global process count. */
     private static int nextPID=0;
+    private static final int ROOT =0;
     private static int runningProcesses=0;
     /** Unique Process ID. */
     private int processID;
-    private int parentID;
+    private UserProcess parentID;
     private LinkedList<UserProcess> children;
     private UThread currThread;
     public int exitStatus;

@@ -193,9 +193,8 @@ public class KThread {
 
 
 	currentThread.status = statusFinished;
-	KThread next;
-	while((next=joinQueue.nextThread())!=null)
-		readyQueue.waitForAccess(next);//if not empty adds waiting threads to readyQueue		
+	if(joinQueue!=null)
+		readyQueue.waitForAccess(joinQueue.nextThread());//if not empty adds waiting threads to readyQueue		
 	
 	sleep();
     }

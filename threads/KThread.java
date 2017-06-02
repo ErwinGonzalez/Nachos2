@@ -408,6 +408,20 @@ public class KThread {
 
 	private int which;
     }
+    private static class AlarmTest implements Runnable {
+	AlarmTest(int time) {
+	    this.time = time;
+	}
+	
+	public void run() {
+		System.out.println("Entering alarmTest, time: "+Machine.timer().getTime());
+		System.out.println("Entering alarmTest, wait: "+this.time);
+		ThreadedKernel.alarm.waitUntil(time);
+		System.out.println("Exiting alarmTest, time: "+Machine.timer().getTime());
+	}
+
+	private int time;
+    }
 	
     /**
      * Tests whether this module is working.
@@ -429,7 +443,20 @@ public class KThread {
 	thread3.join();
 	thread3.fork();
     }
-    
+    public static void alarmTest(){
+	
+	Lib.debug(dbgThread, "Enter KThread.alarmTest");	
+	
+	//new KThread(new PingTest(1)).setName("forked thread").fork();
+	//new PingTest(0).run();
+	KThread thread1 = new KThread(new AlarmTest(400));
+	KThread thread2 = new KThread(new AlarmTest(500));
+	KThread thread3 = new KThread(new AlarmTest(1000));
+	thread1.fork();
+	thread2.fork();
+	thread3.fork();
+	thread3.join();
+	}
     
     private static final char dbgThread = 't';
 

@@ -142,7 +142,12 @@ public class UserKernel extends ThreadedKernel {
     public static int getFreePages(){
     	return freePages;
     }
-	
+    public static int getNextProcessID(){
+	int ret = process;
+	process++;
+	return ret;
+    }
+
     /** Globally accessible reference to the synchronized console. */
     public static SynchConsole console;
     /** Array representing the physical memory pages. */
@@ -151,6 +156,7 @@ public class UserKernel extends ThreadedKernel {
     private static int freePages;
     /** Semaphore used to synchronize access. */
     private static Semaphore pagesSem;
+    private static int process=0;
 
     // dummy variables to make javac smarter
     private static Coff dummy1 = null;

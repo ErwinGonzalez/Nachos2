@@ -199,10 +199,10 @@ public class UserProcess {
 	Lib.assertTrue(offset >= 0 && length >= 0 && offset+length <= data.length);
 
 	byte[] memory = Machine.processor().getMemory();
-	
+	Lib.debug(dbgProcess,"vaddr:"+vaddr+" offset:"+offset+" length:"+length);
 	/*// for now, just assume that virtual addresses equal physical addresses
 	if (vaddr < 0 || vaddr >= memory.length)
-	    return 0;*/
+	    return 0;*/	
 	    
 	// gets page number and offset for the vpn,
 	int vpn = Machine.processor().pageFromAddress(vaddr);
@@ -211,18 +211,21 @@ public class UserProcess {
 	// get corresponding ppn from pageTable
 	int ppn = pageTable[vpn].ppn;
 	//obtains paddr
-	int paddr = ppn*pageSize+offset;
+	int paddr = (ppn*pageSize)+offset;
+	Lib.debug(dbgProcess,"paddr:"+paddr+" ppn:"+ppn);
 	// updates entry 
 	TranslationEntry entry = pageTable[vpn];
 	entry.used=true;
 	entry.dirty=true;
 	// checks if the paddr is valid 
 	// might need to check if offset goes over the page
-	if(entry.readOnly || entry.valid!=true || vpn<0 || vpn>numPages )
-		return 0;
+	if(entry.readOnly || !entry.valid || vpn<0 || vpn>numPages ){
+		Lib.debug(dbgProcess,"error");
+		return 0;}
 	
-	int amount = Math.min(length, memory.length-paddr);
-	System.arraycopy(data, offset, memory, paddr, amount);
+	int amount = Math.min(length, memory.length-vaddr);
+	Lib.debug(dbgProcess,"copying data ");
+	System.arraycopy(data, offset, memory, vaddr, amount);
 
 	return amount;
     }
@@ -411,11 +414,11 @@ public class UserProcess {
      */
     private int handleHalt() {
 	Lib.debug(dbgProcess,"handleHalt() ");
-	// TODO add unique process ID checking so that only the root process can call halt
+	if(processID==0){
 		Machine.halt();
-		Lib.assertNotReached("Machine.halt() did not halt machine!");
+		Lib.assertNotReached("Machine.halt() did not halt machine!");}
 
-	return 0;
+	return -1;
     }
     /*
 	handleExit(int a0), syscall
@@ -440,12 +443,12 @@ public class UserProcess {
 	unloadSections();
 	exitStatus=a0;
 	//signal process waiting? might just use UThread join to handle
-	if(--runningProcesses==0)	
+	if(processID==ROOT)	
 	    UserKernel.kernel.terminate();
 	//add assert so that caller is current thread
-	Lib.assertTrue(KThread.currentThread()==this.currThread);	
-		currThread.finish();
-
+	else
+	    currThread.finish();
+	Lib.assertNotReached();
     }
     /*
 	handleExec(int a0, int a1, int a2), syscall
@@ -628,11 +631,16 @@ public class UserProcess {
 	Lib.debug(dbgProcess,"Bytes"+a2);
 	// reads file into buffer
 	byte[] buffer =new byte[a2];
-	int read2 = fileDescriptors[a0].read(a0,buffer,0,a2);
-	if(read2<0)
-		return -1;
-	else
-		return writeVirtualMemory(read2,buffer);
+	Lib.debug(dbgProcess,"Buff size "+buffer.length);
+	OpenFile fie = fileDescriptors[a0];
+	int read2 = fie.read(a0,buffer,0,a2);
+	int ret= writeVirtualMemory(a1,buffer,0,a2);
+	Lib.debug(dbgProcess,"bytes read "+read2);
+	String v="";
+	for(int i=0;i<a2;i++)
+		v+=buffer[i];
+	Lib.debug(dbgProcess,v);
+	return ret;
     }
     /*
 	handleWrite(int a0, int a1, int a2), syscall
@@ -646,19 +654,25 @@ public class UserProcess {
     */
     private int handleWrite(int a0, int a1, int a2){
 	// returns -1 if buffer is at invalid address
-	if(a1<0)
-	    return -1;
+	Lib.debug(dbgProcess,"handleWrite()");
+	if(a1<0){
+	    Lib.debug(dbgProcess,"invalid file descriptor");
+	    return -1;}
 	// returns -1 if file descriptor is out of range or if size to be read is less than  0
 	if(a0<0 || a0>15 || a2<0)	
 	    return -1;
 	// if file to be written isn't part of the process' fileDescriptors return -1 	
-	if(fileDescriptors[a0] == null)
+	if(fileDescriptors[a0] == null){
+            Lib.debug(dbgProcess,"file descriptor is not open, exiting...");
 	    return -1;
-	
+	}
 	// write buffer into file
 	byte[] buffer =new byte[a2];
 	int write = readVirtualMemory(a1,buffer,0,a2);
-	return fileDescriptors[a0].write(buffer,0,write);
+	int retBytes=fileDescriptors[a0].write(buffer,0,write);;
+	if(retBytes<a2)
+		return -1;
+	return retBytes;
 
     }
     /*
@@ -704,8 +718,7 @@ public class UserProcess {
     	for(int j=0;j<16;j++){
     	    file = fileDescriptors[j];
     	    if(file!=null && file.getName().equals(name)){
-	    	Lib.debug(dbgProcess,"file "+fileDescriptors[j].getName());
-		Lib.debug(dbgProcess,"  "+file.getName().equals(name));
+	    	Lib.debug(dbgProcess,"file "+fileDescriptors[j].getName()+" is open, can't unlink");
     	    	i=j;
     	    	break;
     	    }

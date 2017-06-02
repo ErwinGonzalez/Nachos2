@@ -49,11 +49,11 @@ public class UserKernel extends ThreadedKernel {
 
 	char c;
 
-	do {
+	/*do {
 	    c = (char) console.readByte(true);
 	    console.writeByte(c);
 	}
-	while (c != 'q');
+	while (c != 'q');*/
 
 	System.out.println("");
     }

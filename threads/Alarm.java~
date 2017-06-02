@@ -69,6 +69,7 @@ public class Alarm {
 	    KThread.yield();*/
 	boolean intStatus = Machine.interrupt().disable();//disable interrupts
 	waitingThreads.add(new newWaitThread(wakeTime,KThread.currentThread()));//add thread to waiting Queue
+	System.out.println("added to list, time: "+Machine.timer().getTime());
 	KThread.currentThread().sleep();//sleep current Thread
 	Machine.interrupt().restore(intStatus);//restores interruptions
     }

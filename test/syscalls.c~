@@ -1,8 +1,8 @@
 #include "syscall.h"
 
 #define NULL 0
-int
-main()
+
+void main()
 {
 	//char*  file = "new.txt";
 	//creat(file);
@@ -20,9 +20,7 @@ main()
 	arg[0]=prog2;
 	int jId;
 	id2=exec(prog2,1,arg);
-	jId = join(id,&exitS);
-	///if(jId==0){
-		//printf("joined process %d\n",id);}
+
 	//exit(0);
 	//unlink(file);
     /* not reached */
